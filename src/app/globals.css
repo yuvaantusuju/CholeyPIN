@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-950: #08080c;
+  --color-ink-900: #0e0f16;
+  --color-ink-850: #14161f;
+  --color-ink-800: #1b1e2a;
+  --color-ink-700: #262a3a;
+  --color-ink-600: #3a3f54;
+  --color-brand-400: #ff5c8a;
+  --color-brand-500: #f43f6f;
+  --color-brand-600: #d9265a;
+  --color-accent-400: #7c5cff;
+  --color-accent-500: #6a45f5;
+  --color-mint-400: #34e0a1;
+  --color-mint-500: #12c97e;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    color-scheme: dark;
+  }
+
+  body {
+    background:
+      radial-gradient(1100px 620px at 12% -8%, rgba(244, 63, 111, 0.16), transparent 62%),
+      radial-gradient(900px 560px at 88% 4%, rgba(108, 69, 245, 0.16), transparent 60%),
+      #08080c;
+    color: #eef0f6;
+  }
+
+  ::selection {
+    background: rgba(244, 63, 111, 0.32);
+  }
+}
+
+@layer utilities {
+  .panel {
+    background: linear-gradient(180deg, rgba(27, 30, 42, 0.86), rgba(14, 15, 22, 0.92));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 22px 60px -28px rgba(0, 0, 0, 0.9);
+  }
+
+  .panel-soft {
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .glow-brand {
+    box-shadow: 0 0 0 1px rgba(244, 63, 111, 0.4), 0 12px 40px -12px rgba(244, 63, 111, 0.55);
+  }
+
+  .glow-accent {
+    box-shadow: 0 0 0 1px rgba(124, 92, 255, 0.4), 0 12px 40px -12px rgba(124, 92, 255, 0.5);
+  }
+
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  }
+
+  .scroll-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.16);
+    border-radius: 999px;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.1) 50%,
+    rgba(255, 255, 255, 0.04) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(244, 63, 111, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(244, 63, 111, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(244, 63, 111, 0);
+  }
+}
+
+.pulse-ring {
+  animation: pulse-ring 2s infinite;
+}
