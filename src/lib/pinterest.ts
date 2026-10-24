@@ -505,25 +505,138 @@ export async function resolvePin(input: string): Promise<ResolvedPin> {
   };
 }
 
-/** Read a caption track (WebVTT) and turn it into a plain transcript string. */
-export async function fetchTranscript(captionsUrl: string): Promise<string | null> {
+export interface CaptionCue {
+  /** Cue index as it appears in the WebVTT file. */
+  index: number;
+  /** Start time in seconds from the beginning of the video. */
+  start: number;
+  /** End time in seconds. */
+  end: number;
+  /** The spoken text for this cue. */
+  text: string;
+}
+
+export interface CaptionTrack {
+  cues: CaptionCue[];
+  /** Full plain-text transcript. */
+  text: string;
+  /** Total duration of the track in seconds, if known. */
+  duration: number | null;
+}
+
+function parseTimestamp(raw: string): number | null {
+  const match = raw.trim().match(/^(?:(\d{1,2}):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?$/);
+  if (!match) return null;
+  const hours = match[1] ? Number(match[1]) : 0;
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3]);
+  const millis = match[4] ? Number(match[4].padEnd(3, "0")) : 0;
+  return hours * 3600 + minutes * 60 + seconds + millis / 1000;
+}
+
+/**
+ * Parse a WebVTT caption track into timestamped cues.
+ *
+ * Keeping the timings matters: the hook is defined by *when* something is
+ * said, and without timestamps the model can only guess which line opens the
+ * video. Each cue also keeps its source caption track URL and index so a
+ * quoted hook can be traced back to its exact origin.
+ */
+export function parseVtt(vtt: string): CaptionTrack {
+  const normalised = vtt.replace(/\r\n/g, "\n").replace(/^WEBVTT.*$/m, "");
+  const blocks = normalised.split(/\n\s*\n/);
+
+  const cues: CaptionCue[] = [];
+  for (const block of blocks) {
+    const lines = block
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!lines.length) continue;
+
+    const timingIndex = lines.findIndex((line) => line.includes("-->"));
+    if (timingIndex === -1) continue;
+
+    const [rawStart, rawEnd] = lines[timingIndex].split("-->");
+    const start = parseTimestamp(rawStart ?? "");
+    const end = parseTimestamp(rawEnd ?? "");
+    if (start === null) continue;
+
+    const text = lines
+      .slice(timingIndex + 1)
+      .join(" ")
+      .replace(/<[^>]+>/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) continue;
+
+    cues.push({
+      index: cues.length + 1,
+      start,
+      end: end ?? start,
+      text,
+    });
+  }
+
+  const last = cues[cues.length - 1];
+  return {
+    cues,
+    text: cues.map((cue) => cue.text).join(" "),
+    duration: last ? last.end : null,
+  };
+}
+
+/** Format seconds as a compact `m:ss` or `h:mm:ss` stamp. */
+export function formatTimestamp(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const whole = Math.floor(seconds);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = whole % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+/**
+ * Render the first `seconds` of a caption track as a timestamped script.
+ * This is the "hook source" the analyst reads: each line is anchored to the
+ * moment it is spoken, so the hook can be quoted exactly.
+ */
+export function buildTimedScript(
+  track: CaptionTrack,
+  seconds = 15,
+  limit = 12,
+): string {
+  const window = track.cues.filter((cue) => cue.start <= seconds).slice(0, limit);
+  if (!window.length) return "";
+  return window
+    .map(
+      (cue) =>
+        `[${formatTimestamp(cue.start)}-${formatTimestamp(cue.end)}] ${cue.text}`,
+    )
+    .join("\n");
+}
+
+/** Read a caption track (WebVTT) and turn it into a timestamped script. */
+export async function fetchCaptionTrack(
+  captionsUrl: string,
+): Promise<CaptionTrack | null> {
   try {
     const response = await fetch(captionsUrl, {
       headers: { "User-Agent": USER_AGENT },
       cache: "no-store",
     });
     if (!response.ok) return null;
-    const vtt = await response.text();
-    return vtt
-      .replace(/^WEBVTT.*$/gm, "")
-      .replace(/^\d+$/gm, "")
-      .replace(/(\d{2}:\d{2}:\d{2}\.\d{3} --> .*)$/gm, "")
-      .replace(/<[^>]+>/g, "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .join(" ");
+    return parseVtt(await response.text());
   } catch {
     return null;
   }
+}
+
+/** Read a caption track and return just the plain transcript text. */
+export async function fetchTranscript(captionsUrl: string): Promise<string | null> {
+  const track = await fetchCaptionTrack(captionsUrl);
+  return track?.text ?? null;
 }

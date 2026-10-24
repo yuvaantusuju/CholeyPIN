@@ -54,6 +54,29 @@ const STAGE_COPY: Record<Stage, { label: string; detail: string }> = {
   error: { label: "Failed", detail: "Something went wrong. See the log." },
 };
 
+type CaptionCue = {
+  index: number;
+  start: number;
+  end: number;
+  text: string;
+};
+
+type CaptionData = {
+  source: string | null;
+  language: string | null;
+  duration: number | null;
+  cues: CaptionCue[];
+  timedScript: string[];
+};
+
+type HookSourceData = {
+  source: string | null;
+  language: string | null;
+  window: string;
+  cues: CaptionCue[];
+  script: string;
+};
+
 const ANALYSIS_MODEL = "gpt-5.4-nano";
 
 export default function AgentWorkbench() {
@@ -62,6 +85,8 @@ export default function AgentWorkbench() {
   const [log, setLog] = useState<string[]>([]);
   const [pin, setPin] = useState<PinData | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
+  const [captions, setCaptions] = useState<CaptionData | null>(null);
+  const [hookSource, setHookSource] = useState<HookSourceData | null>(null);
   const [analysis, setAnalysis] = useState<PinAnalysis | null>(null);
   const [edited, setEdited] = useState<PinAnalysis | null>(null);
   const [user, setUser] = useState<PuterUser | null>(null);
@@ -113,6 +138,8 @@ export default function AgentWorkbench() {
     setLog([]);
     setPin(null);
     setTranscript(null);
+    setCaptions(null);
+    setHookSource(null);
     setAnalysis(null);
     setEdited(null);
 
@@ -133,10 +160,18 @@ export default function AgentWorkbench() {
       const resolvedPin = resolveData.pin as PinData;
       setPin(resolvedPin);
       setTranscript(resolveData.transcript ?? null);
+      setCaptions(resolveData.captions ?? null);
+      setHookSource(resolveData.hookSource ?? null);
       appendLog(
         `Pin ${resolvedPin.pinId} resolved — ${resolvedPin.hashtags.length} hashtags, ` +
           `${resolvedPin.durationMs ? `${(resolvedPin.durationMs / 1000).toFixed(1)}s` : "duration unknown"}.`,
       );
+      if (resolveData.captions?.cues?.length) {
+        appendLog(
+          `Caption track: ${resolveData.captions.cues.length} cues ` +
+            `(${resolveData.captions.language ?? "unknown language"}).`,
+        );
+      }
       if (!resolvedPin.videoUrl && !resolvedPin.hlsUrl) {
         throw new Error("That pin has no downloadable video.");
       }
@@ -158,7 +193,14 @@ export default function AgentWorkbench() {
       const response = await puter.ai.chat(
         [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: promptFor(resolvedPin, resolveData.transcript ?? null) },
+          {
+            role: "user",
+            content: promptFor(
+              resolvedPin,
+              resolveData.transcript ?? null,
+              resolveData.captions ?? null,
+            ),
+          },
         ],
         mediaUrl,
         false,
@@ -452,7 +494,27 @@ export default function AgentWorkbench() {
                     ) : null}
                   </div>
 
-                  {transcript ? (
+                  {captions?.cues?.length ? (
+                    <details className="mt-4" open>
+                      <summary className="cursor-pointer text-[11px] uppercase tracking-[0.14em] text-white/40 hover:text-white/60">
+                        Caption track ({captions.cues.length} cues
+                        {captions.language ? ` · ${captions.language}` : ""})
+                      </summary>
+                      <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto scroll-thin">
+                        {captions.cues.map((cue) => (
+                          <li
+                            key={cue.index}
+                            className="flex gap-2.5 text-[12px] leading-snug text-white/50"
+                          >
+                            <span className="shrink-0 font-mono tabular-nums text-white/25">
+                              {formatStamp(cue.start)}
+                            </span>
+                            <span className="min-w-0">{cue.text}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : transcript ? (
                     <details className="mt-4">
                       <summary className="cursor-pointer text-[11px] uppercase tracking-[0.14em] text-white/40">
                         Auto transcript
@@ -487,7 +549,22 @@ export default function AgentWorkbench() {
 
               <div className="grid gap-5 lg:grid-cols-2">
                 <div className="space-y-4">
-                  <Field label="Original hook (what's spoken)" value={analysis.spokenHook} muted />
+                  <HookSourcePanel
+                    analysis={edited ?? analysis}
+                    hookSource={hookSource}
+                  />
+
+                  {analysis.hookSummary ? (
+                    <div>
+                      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-white/40">
+                        What the hook does
+                      </p>
+                      <p className="rounded-2xl border border-white/8 bg-white/[0.02] px-3.5 py-2.5 text-[13px] leading-relaxed text-white/65">
+                        {analysis.hookSummary}
+                      </p>
+                    </div>
+                  ) : null}
+
                   <Field
                     label="Rewritten hook"
                     value={edited?.hook ?? ""}
@@ -729,7 +806,11 @@ export default function AgentWorkbench() {
   );
 }
 
-function promptFor(pin: PinData, transcript: string | null): string {
+function promptFor(
+  pin: PinData,
+  transcript: string | null,
+  captions: CaptionData | null,
+): string {
   return buildAnalysisPrompt({
     title: pin.title,
     description: pin.description,
@@ -737,7 +818,142 @@ function promptFor(pin: PinData, transcript: string | null): string {
     durationMs: pin.durationMs,
     creatorName: pin.creatorName,
     transcript,
+    timedScript: captions?.timedScript?.join("\n") ?? null,
+    captionSource: captions?.source ?? null,
+    captionLanguage: captions?.language ?? null,
   });
+}
+
+const ORIGIN_LABELS: Record<string, string> = {
+  spoken: "Spoken out loud",
+  on_screen_text: "On-screen text",
+  visual: "Visual only",
+  pinterest_caption: "Pinterest caption",
+  none: "No hook found",
+};
+
+const ORIGIN_STYLES: Record<string, string> = {
+  spoken: "bg-mint-500/15 text-mint-400",
+  on_screen_text: "bg-accent-500/15 text-accent-400",
+  visual: "bg-brand-500/15 text-brand-400",
+  pinterest_caption: "bg-amber-500/15 text-amber-400",
+  none: "bg-white/8 text-white/45",
+};
+
+/**
+ * Shows exactly where the hook came from: the verbatim quote, its origin
+ * type, the moment it happens, and the caption cues it was drawn from.
+ */
+function HookSourcePanel({
+  analysis,
+  hookSource,
+}: {
+  analysis: PinAnalysis;
+  hookSource: HookSourceData | null;
+}) {
+  const source = analysis.hookSource;
+  const origin = source.origin ?? "none";
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.06] to-white/[0.02] p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-white/40">
+          Hook source
+        </p>
+        <span
+          className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${
+            ORIGIN_STYLES[origin] ?? ORIGIN_STYLES.none
+          }`}
+        >
+          {ORIGIN_LABELS[origin] ?? origin}
+        </span>
+      </div>
+
+      {/* The verbatim quote */}
+      <blockquote className="rounded-xl border-l-2 border-brand-500/70 bg-black/30 px-3.5 py-3">
+        <p className="text-[15px] font-medium leading-snug text-white/95">
+          {source.quote || analysis.hookQuote || "—"}
+        </p>
+      </blockquote>
+
+      {/* Provenance row */}
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-[11px]">
+        <div>
+          <dt className="text-white/35">Timestamp</dt>
+          <dd className="mt-0.5 font-mono tabular-nums text-white/75">
+            {source.timestamp > 0 ? `${source.timestamp.toFixed(2)}s` : "n/a"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-white/35">Time range</dt>
+          <dd className="mt-0.5 font-mono tabular-nums text-white/75">
+            {source.timeRange || "n/a"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-white/35">Caption cue</dt>
+          <dd className="mt-0.5 font-mono tabular-nums text-white/75">
+            {source.cueIndex != null ? `#${source.cueIndex}` : "n/a"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-white/35">Language</dt>
+          <dd className="mt-0.5 font-mono tabular-nums text-white/75">
+            {hookSource?.language ?? "n/a"}
+          </dd>
+        </div>
+      </dl>
+
+      {source.label ? (
+        <p className="mt-3 border-t border-white/8 pt-2.5 text-[11px] text-white/40">
+          {source.label}
+        </p>
+      ) : null}
+
+      {/* The underlying caption cues, so the quote can be traced back */}
+      {hookSource?.cues?.length ? (
+        <details className="mt-3 border-t border-white/8 pt-3">
+          <summary className="cursor-pointer text-[10.5px] uppercase tracking-[0.14em] text-white/40 hover:text-white/60">
+            Source cues (0:00 – {hookSource.window.split(" - ")[1] ?? "0:15"})
+          </summary>
+          <ul className="mt-2 space-y-1.5">
+            {hookSource.cues.map((cue) => {
+              const isSource =
+                source.cueIndex != null && cue.index === source.cueIndex;
+              return (
+                <li
+                  key={cue.index}
+                  className={`flex gap-2.5 rounded-lg px-2 py-1.5 text-[11.5px] leading-snug ${
+                    isSource
+                      ? "bg-brand-500/12 text-white/90 ring-1 ring-brand-500/30"
+                      : "text-white/45"
+                  }`}
+                >
+                  <span className="shrink-0 font-mono tabular-nums text-white/30">
+                    {formatStamp(cue.start)}
+                  </span>
+                  <span className="min-w-0">{cue.text}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      ) : (
+        <p className="mt-3 border-t border-white/8 pt-3 text-[11px] text-white/35">
+          This pin has no caption track, so the hook was read from the video frame
+          and the pin&rsquo;s own caption.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function formatStamp(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const whole = Math.floor(seconds);
+  const minutes = Math.floor(whole / 60);
+  const secs = whole % 60;
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
 function Field({
